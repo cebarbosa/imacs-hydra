@@ -2,16 +2,17 @@ import platform
 
 import matplotlib.pyplot as plt
 
+project_name = "imacs-hydra"
 node = platform.node()
 lai_machines = ["uv100", "alphacrucis", "yaci.iag.usp.br"] # nodes @LAI cluster
-# Settings for personal computer
+# Settings for personal computer; add an elif clause for each different case
 if node in ["kadu-Inspiron-5557"]:
-    home_dir = "/home/kadu/Dropbox/imacs-imf"
+    home_dir = f"/home/kadu/Dropbox/{project_name}"
     cvd_dir = "/home/kadu/Dropbox/SSPs/CvD18"
     mp_pool_size = 4 # Number of cores for parallel processing
 # Settings for supercomputers @IAG/USP
 elif node in lai_machines:
-    home_dir = "/sto/home/cebarbosa/imacs-imf"
+    home_dir = f"/sto/home/cebarbosa/{project_name}"
     cvd_dir = "/sto/home/cebarbosa/SSPs/CvD18"
     mp_pool_size = 64
 else:
