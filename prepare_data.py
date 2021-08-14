@@ -10,13 +10,48 @@ from astropy.table import Table
 import astropy.constants as const
 from spectres import spectres
 
-from paintbox.utils import broad2res, disp2vel
+from paintbox.utils import broad2res, logspace_dispersion
 
 import context
 
-def prepare_spectrum(spec_file, outfile, overwrite=False):
+def define_wranges(specs):
+    """" Inspect masks, determine location of the chip gaps and determine
+    wavelength ranges for the fit with paintbox. """
+    masks = []
+    for spec in specs:
+        wave, flux, fluxerr, mask, res_kms = np.loadtxt(spec, unpack=True)
+        mask = mask.astype(np.bool).astype(np.int)
+        masks.append(mask)
+    masks = np.array(masks)
+    mask = masks.max(axis=0) # Combining all masks into one mask
+    badpixels = np.array([i for i, x in enumerate(mask) if x == 0])
+    sections0 = consecutive(badpixels)
+    # Filling small gaps
+    for section in sections0:
+        gap_size = len(section)
+        if gap_size < 50:
+            mask[section] = 1
+    goodpixels = np.array([i for i, x in enumerate(mask) if x == 1])
+    sections = consecutive(goodpixels)
+    w1 = [wave[x[0]] for x in sections]
+    w2 = [wave[x[-1]] for x in sections]
+    target_res = [250 if w < 7000 else 150 for w in w1]
+    wranges = Table([np.arange(len(w1))+1, w1, w2, target_res],
+                  names=["section", "w1", "w2", "sigma_res"])
+    wranges.write(os.path.join(context.home_dir, "tables/wranges.fits"),
+                  overwrite=True)
+    return wranges
+
+def consecutive(data, stepsize=1):
+    """ Groups regions of array with consecutive values.
+
+    # https://stackoverflow.com/questions/7352684/how-to-find-the-groups-of-consecutive-elements-in-a-numpy-array
+    """
+    return np.split(data, np.where(np.diff(data) != stepsize)[0]+1)
+
+def prepare_spectrum(spec_file, outspec, wranges, overwrite=False):
     """ Preparing the spectrum of a single galaxy for the fitting. """
-    if os.path.exists(outfile) and not overwrite:
+    if os.path.exists(outspec) and not overwrite:
         return
     wave, flux, fluxerr, mask, res_kms = np.loadtxt(spec_file, unpack=True)
     mask = mask.astype(np.bool).astype(np.int)
@@ -29,13 +64,16 @@ def prepare_spectrum(spec_file, outfile, overwrite=False):
     c = const.c.to("km/s").value
     fwhms = res_kms / c * wave * 2.355
     # Homogeneize the resolution
-    target_res = np.array([200, 100]) # Rounding up the ideal resolution
-    velscale = (target_res / 3).astype(np.int)
+
     # Splitting the data to work with different resolutions
-    wave_ranges = [[4200, 6680], [8200, 8900]]
     names = ["wave", "flux", "fluxerr", "mask"]
     hdulist = [fits.PrimaryHDU()]
-    for i, (w1, w2) in enumerate(wave_ranges):
+    for i, section in enumerate(wranges):
+        w1 = section["w1"]
+        w2 = section["w2"]
+        target_res = section["sigma_res"]
+        name = f"section{section['section']}"
+        velscale = np.array(target_res / 3).astype(np.int)
         idx = np.where((wave >= w1) & (wave < w2))[0]
         w = wave[idx]
         f = flux[idx]
@@ -43,10 +81,10 @@ def prepare_spectrum(spec_file, outfile, overwrite=False):
         m = mask[idx]
         # res = res_kms[idx] # This was used to check a good target_res
         fwhm = fwhms[idx]
-        target_fwhm = target_res[i] / c * w * 2.355
+        target_fwhm = target_res / c * w * 2.355
         fbroad, fbroaderr = broad2res(w, f, fwhm, target_fwhm, fluxerr=ferr)
         # Resampling data
-        owave = disp2vel([w[0], w[-1]], velscale[i])
+        owave = logspace_dispersion([w[0], w[-1]], velscale)
         oflux, ofluxerr = spectres(owave, w, fbroad, spec_errs=fbroaderr)
         # Filtering the high variance of the output error for the error.
         ofluxerr = gaussian_filter1d(ofluxerr, 3)
@@ -57,25 +95,35 @@ def prepare_spectrum(spec_file, outfile, overwrite=False):
         wmax = owave[omask].max()
         omask[owave < wmin + 5] = False
         omask[owave > wmax - 5] = False
+        # Mask for NaNs
+        omask[np.isnan(oflux * ofluxerr)] = False
         ########################################################################
         obsmask = -1 * (omask.astype(np.int) - 1)
         table = Table([owave, oflux, ofluxerr, obsmask],
                       names=names)
         hdu = fits.BinTableHDU(table)
+        hdu.header["EXTNAME"] = name.upper()
+        hdu.header["SIGMA_RES"] = target_res
         hdulist.append(hdu)
     hdulist = fits.HDUList(hdulist)
-    hdulist.writeto(outfile, overwrite=True)
+    hdulist.writeto(outspec, overwrite=True)
     return
 
-def prepare_sample(sample, overwrite=False):
-    for galaxy in sample:
-        wdir = os.path.join(context.home_dir, "data", galaxy)
-        os.chdir(wdir)
-        spec_files = [_ for _ in os.listdir(wdir) if _.endswith("noconv.txt")]
-        for spec_file in spec_files:
-            outfile = os.path.join(wdir, spec_file.replace(".txt", ".fits"))
-            prepare_spectrum(spec_file, outfile, overwrite=overwrite)
+def prepare_sample_hydra():
+    wdir = os.path.join(context.home_dir, "data")
+    os.chdir(wdir)
+    specs = sorted([_ for _ in os.listdir(wdir) if _.endswith("spectrum.dat")])
+    pb_dir = os.path.join(context.home_dir, "paintbox")
+    if not os.path.exists(pb_dir):
+        os.mkdir(pb_dir)
+    wranges = define_wranges(specs)
+    for spec in specs:
+        name = "_".join(spec.split("_")[:-1])
+        spec_dir = os.path.join(pb_dir, name)
+        if not os.path.exists(spec_dir):
+            os.mkdir(spec_dir)
+        outspec = os.path.join(spec_dir, f"{name}.fits")
+        prepare_spectrum(spec, outspec, wranges, overwrite=True)
 
 if __name__ == "__main__":
-    galaxies = ["NGC4033", "NGC7144"]
-    prepare_sample(galaxies, overwrite=True)
+    prepare_sample_hydra()
