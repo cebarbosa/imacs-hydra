@@ -35,7 +35,7 @@ def define_wranges(specs):
     sections = consecutive(goodpixels)
     w1 = [wave[x[0]] for x in sections]
     w2 = [wave[x[-1]] for x in sections]
-    target_res = [250 if w < 7000 else 150 for w in w1]
+    target_res = [250, 200, 200, 200, 100]
     wranges = Table([np.arange(len(w1))+1, w1, w2, target_res],
                   names=["section", "w1", "w2", "sigma_res"])
     wranges.write(os.path.join(context.home_dir, "tables/wranges.fits"),
