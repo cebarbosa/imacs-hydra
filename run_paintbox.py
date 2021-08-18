@@ -14,7 +14,7 @@ from tqdm import tqdm
 from ppxf import ppxf_util
 import seaborn as sns
 import paintbox as pb
-from paintbox.utils import CvD18, disp2vel
+from paintbox.utils import CvD18, logspace_dispersion
 
 import context
 
@@ -38,7 +38,7 @@ def make_paintbox_model(wave, store, name="test", porder=45, nssps=1, sigma=100)
     vname = "vsyst_{}".format(name)
     stars = pb.Resample(wave, pb.LOSVDConv(pop, losvdpars=[vname, "sigma"]))
     # Adding a polynomial
-    poly = pb.Polynomial(wave, porder, zeroth=True, pname=f"p{name}")
+    poly = pb.Polynomial(wave, porder, zeroth=True, pname=f"poly_{name}")
     # Including emission lines
     target_fwhm = lambda w: sigma / const.c.to("km/s").value * w * 2.355
     gas_templates, gas_names, line_wave = ppxf_util.emission_lines(
@@ -60,7 +60,27 @@ def make_paintbox_model(wave, store, name="test", porder=45, nssps=1, sigma=100)
     return sed, limits, gas_names
 
 def set_priors(parnames, limits, linenames, vsyst, nssps=1):
-    """ Defining prior distributions for the model. """
+    """ Defining prior distributions for the model.
+
+    The parameters in a given paintbox model are labeled. We use these names to
+    set the priors of the models.
+
+    Parameters
+    ----------
+    parnames: list
+        Name of the parameters in the paintbox model.
+
+    limits: dict
+        Dictionary containing all parameters that are bounded. Each item in
+        the dictionary must contain a minimum and maximum values.
+
+    vsyst: float
+        Approximate radial velocity of the system.
+
+    nssps: int
+        Number of single stellar populations in the model.
+
+    """
     priors = {}
     for parname in parnames:
         name = parname.split("_")[0]
@@ -68,8 +88,8 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
             vmin, vmax = limits[name]
             delta = vmax - vmin
             priors[parname] = stats.uniform(loc=vmin, scale=delta)
-        elif parname in vsyst:
-            priors[parname] = stats.norm(loc=vsyst[parname], scale=500)
+        elif name == "vsyst":
+            priors[parname] = stats.norm(loc=vsyst, scale=500)
         elif parname == "eta":
             priors["eta"] = stats.uniform(loc=1., scale=19)
         elif parname == "nu":
@@ -82,8 +102,8 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
             priors[parname] = stats.uniform(loc=0, scale=1)
         elif name in linenames:
             priors[parname] = stats.expon(loc=0, scale=0.5)
-        elif name in ["pred", "pblue"]:
-            porder = int(parname.split("_")[1])
+        elif name == "poly":
+            porder = int(parname.split("_")[2])
             if porder == 0:
                 mu, sd = 1 / nssps, 1
                 a, b = (0 - mu) / sd, (np.infty - mu) / sd
@@ -107,6 +127,9 @@ def log_probability(theta):
     return lp + ll
 
 def run_sampler(outdb, nsteps=5000):
+    """ Runs emcee to fit the model. """
+    # Global variables are used here to improve the performance of the
+    # paralellization
     global logp
     global priors
     ndim = len(logp.parnames)
@@ -283,45 +306,79 @@ def plot_corner(trace, outroot, title=None, redo=False):
     plt.close(fig)
     return
 
-def run_paintbox(galaxy, spec, V0s, dlam=100, nsteps=5000, loglike="normal2",
-                 nssps=1, target_res=None):
-    """ Run paintbox. """
+def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
+                 nssps=2, dsky=3):
+    """ Run paintbox.
+
+    Parameters
+    ----------
+    spec: str
+        FITS file containing spectra in multi-extension format.
+
+    wranges: astropy.table.Table
+        Definition of the wavelength ranges and resolutions to be used in the
+    fitting.
+
+    dlam: float, (default is 100)
+        Fator used to define the polynomial order of a given section, such that
+        poly_order = (w_max - w_min) / dlam.
+
+    nsteps: int
+        Number of steps used in MCMC run with emcee.
+
+    loglike: str
+        Type of log-likelihood used in the fitting. Options are
+            - normal: normal/Gaussian loglikelihood.
+            - normal2: normal loglie, with a factor (eta) to inflate the
+            uncertainties.
+            - studt: Student's t-distribution loglike. Has an additional
+            parameter (nu) that describes the degrees-of -freedom of the
+            distribution. Intended to handle outliers in the loglike
+            distribution.
+            - studt2: same as studt but with scale factor (eta) to inflate the
+            uncertainties
+
+    nssps: int (default is 2)
+        Number os single stellar populations (SSPs) to be used for the
+        stellar component of the model.
+
+    dsky: float (default is 3)
+        Size around telluric lines to be masked.
+
+    """
     global logp, priors
-    target_res = [200, 100] if target_res is None else target_res
     # List of sky lines to be ignored in the fitting
     skylines = np.array([4792, 4860, 4923, 5071, 5239, 5268, 5577, 5889.99,
                          5895, 5888, 5990, 5895, 6300, 6363, 6386, 6562,
                          6583, 6717, 6730, 7246, 8286, 8344, 8430, 8737,
                          8747, 8757, 8767, 8777, 8787, 8797, 8827, 8836,
                          8919, 9310])
-    dsky = 3 # Space around sky lines
     logps = []
-    wranges = [[4000, 6680], [7800, 8900]]
     waves, fluxes, fluxerrs, masks, seds, linenames = [], [], [], [], [], []
-    for i, side in enumerate(["blue", "red"]):
+    for i, wrange in enumerate(wranges):
+        w1 = int(wrange["w1"])
+        w2 = int(wrange["w2"])
+        sigma = int(wrange["sigma_res"])
+        sec = int(wrange["section"])
         # Locationg where pre-processed models will be stored for paintbox
-        sigma = target_res[i]
         store = os.path.join(context.home_dir, "templates",
-                             f"CvD18_sig{sigma}_{side}.fits")
+                             f"CvD18_sig{sigma}_sec{sec}.fits")
         if not os.path.exists(store):
             # Compiling the CvD models
             velscale = sigma / 2
-            wmin = wave.min() - 180
-            wmax = wave.max() + 50
-            twave = disp2vel([wmin, wmax], velscale)
+            wmin = w1 - 180
+            wmax = w2 + 50
+            twave = logspace_dispersion([wmin, wmax], velscale)
             CvD18(twave, sigma=sigma, store=store, libpath=context.cvd_dir)
         # Reading the data
-        tab = Table.read(spec, hdu=i+1)
+        specfile = f"{spec}.fits"
+        tab = Table.read(specfile, hdu=i+1)
         #  Normalizing the data to make priors simple
         norm = np.nanmedian(tab["flux"])
         wave = tab["wave"].data
         flux = tab["flux"].data / norm
         fluxerr = tab["fluxerr"].data / norm
         mask = tab["mask"]
-        idx = np.where((wave < wranges[i][0]) | (wave > wranges[i][1]))[0]
-        mask[idx] = 1
-        # Masking all remaining locations where flux is NaN
-        mask[np.isnan(flux * fluxerr)] = 1
         # Masking lines from Osterbrock atlas
         for line in skylines:
             idx = np.argwhere((wave >= line - dsky) &
@@ -332,8 +389,9 @@ def run_paintbox(galaxy, spec, V0s, dlam=100, nsteps=5000, loglike="normal2",
         wmax = wave[mask==0].max()
         porder = int((wmax - wmin) / dlam)
         # Building paintbox model
+        name = f"s{sec}" # Identification of sector in paintbox
         sed, limits, lines = make_paintbox_model(wave, store,
-                              nssps=nssps, name=side, sigma=sigma,
+                              nssps=nssps, name=name, sigma=sigma,
                               porder=porder)
         logp = pb.Normal2LogLike(flux, sed, obserr=fluxerr, mask=mask)
         logps.append(logp)
@@ -345,55 +403,56 @@ def run_paintbox(galaxy, spec, V0s, dlam=100, nsteps=5000, loglike="normal2",
         linenames += lines
     # Make a joint likelihood for all sections
     logp = logps[0]
-    for i in range(nssps - 1):
+    for i in range(len(wranges) - 1):
         logp += logps[i+1]
     # Making priors
-    v0 = {"vsyst_blue": V0s[0], "vsyst_red": V0s[1]}
-    priors = set_priors(logp.parnames, limits, linenames, vsyst=v0, nssps=nssps)
+    galaxy = spec.split("_")[2]
+    v0 = {"NGC3311": 3825, "NGC3309": 4075, "Halo": 3900}
+    priors = set_priors(logp.parnames, limits, linenames, vsyst=v0[galaxy],
+                        nssps=nssps)
     # Perform fitting
-    pb_dir = f"paintbox_nssps{nssps}_{loglike}_nsteps{nsteps}.h5"
-    if not os.path.exists(pb_dir):
-        os.mkdir(pb_dir)
-    dbname = os.path.join(pb_dir, spec.replace(".fits", ".h5"))
-    # Run in any directory outside Dropbox to avoid problems
-    tmp_db = os.path.join(os.getcwd(), dbname)
+    dbname = f"mcmc_nssps{nssps}_{loglike}_nsteps{nsteps}.h5"
+    # Stores the chain results in a temporary database
+    tmp_db = f"{dbname}_tmp"
     if os.path.exists(tmp_db):
         os.remove(tmp_db)
-    outdb = os.path.join(wdir, dbname)
-    if not os.path.exists(outdb):
+    if not os.path.exists(dbname):
         run_sampler(tmp_db, nsteps=nsteps)
-        shutil.move(tmp_db, outdb)
+        shutil.move(tmp_db, dbname)
     # Post processing of data
     if context.node in context.lai_machines: #not allowing post-processing @LAI
         return
-    reader = emcee.backends.HDFBackend(outdb)
+    reader = emcee.backends.HDFBackend(dbname)
     tracedata = reader.get_chain(discard=int(nsteps * 0.9), flat=True, thin=100)
     trace = Table(tracedata, names=logp.parnames)
     if nssps > 1:
         ssp_pars = list(limits.keys())
         wtrace = weighted_traces(ssp_pars, trace, nssps)
         trace = hstack([trace, wtrace])
-    outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
+    outtab = os.path.join(dbname.replace(".h5", "_results.fits"))
     make_table(trace, outtab)
     # Plot fit
-    outimg = outdb.replace(".h5", "_fit.png")
+    outimg = dbname.replace(".h5", "_fit.png")
     plot_fitting(waves, fluxes, fluxerrs, masks, seds, trace, outimg,
                  skylines=skylines)
     # Make corner plot
     # Choose columns for plot
     cols_for_corner = [_ for _ in trace.colnames if _.endswith("weighted")]
     corner_table = trace[cols_for_corner]
-    corner_file = outdb.replace(".h5", "_corner") # It will be saved in png/pdf
+    corner_file = dbname.replace(".h5", "_corner") # It will be saved in png/pdf
     plot_corner(corner_table, corner_file, title=galaxy, redo=False)
 
-if __name__ == "__main__":
-    galaxies = ["NGC4033", "NGC7144"]
-    V0s = {"NGC7144": (1390, 1860), "NGC4033": (1617, 1617)}
-    for galaxy in galaxies:
-        wdir = os.path.join(context.home_dir, f"data/{galaxy}")
+def pipeline_hydra():
+    """ Pipeline to fit all spectra in the Hydra sample. """
+    ranges_file = os.path.join(context.home_dir, "tables/wranges.fits")
+    wranges = Table.read(ranges_file)
+    # Creating directory to store models
+    data_dir = os.path.join(context.home_dir, "paintbox")
+    specs = os.listdir(data_dir)
+    for spec in specs:
+        wdir = os.path.join(data_dir, spec)
         os.chdir(wdir)
-        specs = sorted([_ for _ in os.listdir(".") if _.endswith(
-                        "bg_noconv.fits")])
-        V0 = V0s[galaxy]
-        for spec in specs:
-            run_paintbox(galaxy, spec, V0, nssps=2)
+        run_paintbox(spec, wranges)
+
+if __name__ == "__main__":
+    pipeline_hydra()

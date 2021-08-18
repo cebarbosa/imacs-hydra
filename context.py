@@ -1,3 +1,4 @@
+import os
 import platform
 
 import matplotlib.pyplot as plt
@@ -17,6 +18,13 @@ elif node in lai_machines:
     mp_pool_size = 64
 else:
     raise ValueError("Please define your directories inside context.py")
+
+# Create some directories for further use
+dirs = ["data", "tables", "templates"]
+for _dir in dirs:
+    newdir = os.path.join(home_dir, _dir)
+    if not os.path.exists(newdir):
+        os.mkdir(newdir)
 
 # Matplotlib settings
 plt.style.context("seaborn-paper")
