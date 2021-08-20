@@ -14,13 +14,12 @@ from tqdm import tqdm
 from ppxf import ppxf_util
 import seaborn as sns
 import paintbox as pb
-from paintbox.utils import CvD18, logspace_dispersion
 
 import context
 
 def make_paintbox_model(wave, store, name="test", porder=45, nssps=1, sigma=100):
     """ Prepare a model with paintbox. """
-    ssp = CvD18(sigma=sigma, store=store, libpath=context.cvd_dir)
+    ssp = pb.CvD18(sigma=sigma, store=store, libpath=context.cvd_dir)
     twave = ssp.wave
     limits = ssp.limits
     if nssps > 1:

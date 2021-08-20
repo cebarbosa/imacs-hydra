@@ -10,7 +10,7 @@ from astropy.table import Table
 import astropy.constants as const
 from spectres import spectres
 
-from paintbox.utils import broad2res, logspace_dispersion
+from paintbox import broad2res, logspace_dispersion
 
 import context
 
@@ -85,10 +85,12 @@ def prepare_spectrum(spec_file, outspec, wranges, overwrite=False):
         fbroad, fbroaderr = broad2res(w, f, fwhm, target_fwhm, fluxerr=ferr)
         # Resampling data
         owave = logspace_dispersion([w[0], w[-1]], velscale)
-        oflux, ofluxerr = spectres(owave, w, fbroad, spec_errs=fbroaderr)
+        oflux, ofluxerr = spectres(owave, w, fbroad, spec_errs=fbroaderr,
+                                   fill=0, verbose=False)
         # Filtering the high variance of the output error for the error.
         ofluxerr = gaussian_filter1d(ofluxerr, 3)
-        omask = spectres(owave, w, m).astype(np.int).astype(np.bool)
+        omask = spectres(owave, w, m, fill=0, verbose=False).astype(
+            np.int).astype(np.bool)
         ########################################################################
         # Include mask for borders of spectrum
         wmin = owave[omask].min()
