@@ -10,7 +10,7 @@ from astropy.table import Table
 import astropy.constants as const
 from spectres import spectres
 
-from paintbox import broad2res, logspace_dispersion
+import paintbox as pb
 
 import context
 
@@ -82,9 +82,9 @@ def prepare_spectrum(spec_file, outspec, wranges, overwrite=False):
         # res = res_kms[idx] # This was used to check a good target_res
         fwhm = fwhms[idx]
         target_fwhm = target_res / c * w * 2.355
-        fbroad, fbroaderr = broad2res(w, f, fwhm, target_fwhm, fluxerr=ferr)
+        fbroad, fbroaderr = pb.broad2res(w, f, fwhm, target_fwhm, fluxerr=ferr)
         # Resampling data
-        owave = logspace_dispersion([w[0], w[-1]], velscale)
+        owave = pb.logspace_dispersion([w[0], w[-1]], velscale)
         oflux, ofluxerr = spectres(owave, w, fbroad, spec_errs=fbroaderr,
                                    fill=0, verbose=False)
         # Filtering the high variance of the output error for the error.
