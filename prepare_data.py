@@ -14,14 +14,21 @@ import paintbox as pb
 
 import context
 
-def define_wranges(specs):
+def define_wranges(specs, redo=True):
     """" Inspect masks, determine location of the chip gaps and determine
     wavelength ranges for the fit with paintbox. """
-    masks = []
+    outtable = os.path.join(context.home_dir, "tables/wranges.fits")
+    if os.path.exists(outtable) and not redo:
+        wranges = Table.read(outtable)
+        return wranges
+    masks, res = [], []
     for spec in specs:
         wave, flux, fluxerr, mask, res_kms = np.loadtxt(spec, unpack=True)
         mask = mask.astype(np.bool).astype(np.int)
         masks.append(mask)
+        res.append(res_kms)
+        plt.plot(wave, res_kms)
+    res = np.array(res).mean(axis=0)
     masks = np.array(masks)
     mask = masks.max(axis=0) # Combining all masks into one mask
     badpixels = np.array([i for i, x in enumerate(mask) if x == 0])
@@ -35,11 +42,10 @@ def define_wranges(specs):
     sections = consecutive(goodpixels)
     w1 = [wave[x[0]] for x in sections]
     w2 = [wave[x[-1]] for x in sections]
-    target_res = [250, 200, 200, 200, 100]
+    target_res = [int(np.ceil(res[x].max()/50) * 50) for x in sections]
     wranges = Table([np.arange(len(w1))+1, w1, w2, target_res],
                   names=["section", "w1", "w2", "sigma_res"])
-    wranges.write(os.path.join(context.home_dir, "tables/wranges.fits"),
-                  overwrite=True)
+    wranges.write(outtable, overwrite=True)
     return wranges
 
 def consecutive(data, stepsize=1):

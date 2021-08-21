@@ -367,8 +367,8 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
             velscale = sigma / 2
             wmin = w1 - 180
             wmax = w2 + 50
-            twave = logspace_dispersion([wmin, wmax], velscale)
-            CvD18(twave, sigma=sigma, store=store, libpath=context.cvd_dir)
+            twave = pb.logspace_dispersion([wmin, wmax], velscale)
+            pb.CvD18(twave, sigma=sigma, store=store, libpath=context.cvd_dir)
         # Reading the data
         specfile = f"{spec}.fits"
         tab = Table.read(specfile, hdu=i+1)
