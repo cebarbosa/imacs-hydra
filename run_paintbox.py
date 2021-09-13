@@ -104,7 +104,7 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
         elif name == "poly":
             porder = int(parname.split("_")[2])
             if porder == 0:
-                mu, sd = 1 / nssps, 1
+                mu, sd = 2, 2
                 a, b = (0 - mu) / sd, (np.infty - mu) / sd
                 priors[parname] = stats.truncnorm(a, b, mu, sd)
             else:
@@ -138,6 +138,7 @@ def run_sampler(outdb, nsteps=5000):
     for i, param in enumerate(logp.parnames):
         logpdf.append(priors[param].logpdf)
         pos[:, i] = priors[param].rvs(nwalkers)
+
     backend = emcee.backends.HDFBackend(outdb)
     backend.reset(nwalkers, ndim)
     try:
@@ -328,7 +329,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     loglike: str
         Type of log-likelihood used in the fitting. Options are
             - normal: normal/Gaussian loglikelihood.
-            - normal2: normal loglie, with a factor (eta) to inflate the
+            - normal2: normal loglike, with a factor (eta) to inflate the
             uncertainties.
             - studt: Student's t-distribution loglike. Has an additional
             parameter (nu) that describes the degrees-of -freedom of the
@@ -377,7 +378,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
         wave = tab["wave"].data
         flux = tab["flux"].data / norm
         fluxerr = tab["fluxerr"].data / norm
-        mask = tab["mask"]
+        mask = tab["mask"].data
         # Masking lines from Osterbrock atlas
         for line in skylines:
             idx = np.argwhere((wave >= line - dsky) &
@@ -400,6 +401,8 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
         masks.append(mask)
         seds.append(sed)
         linenames += lines
+        pmask = np.where(mask, False, True)
+        # plt.plot(wave[pmask], flux[pmask], "-k")
     # Make a joint likelihood for all sections
     logp = logps[0]
     for i in range(len(wranges) - 1):
@@ -409,6 +412,20 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     v0 = {"NGC3311": 3825, "NGC3309": 4075, "Halo": 3900}
     priors = set_priors(logp.parnames, limits, linenames, vsyst=v0[galaxy],
                         nssps=nssps)
+    # # Testing priors
+    # ntest = 8
+    # ndim = len(logp.parnames)
+    # pos = np.zeros((ntest, ndim))
+    # logpdf = []
+    # for i, param in enumerate(logp.parnames):
+    #     logpdf.append(priors[param].logpdf)
+    #     pos[:, i] = priors[param].rvs(ntest)
+    # for i in range(ntest):
+    #     for sed in seds:
+    #         idx = np.array([logp.parnames.index(p) for p in sed.parnames])
+    #         plt.plot(sed.wave, sed(pos[i, idx]), f"C{i+1}")
+    #     print(logp(pos[i]))
+    # plt.show()
     # Perform fitting
     dbname = f"mcmc_nssps{nssps}_{loglike}_nsteps{nsteps}.h5"
     # Stores the chain results in a temporary database
@@ -441,7 +458,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     corner_file = dbname.replace(".h5", "_corner") # It will be saved in png/pdf
     plot_corner(corner_table, corner_file, title=galaxy, redo=False)
 
-def pipeline_hydra():
+def pipeline_hydra(nsteps=5000):
     """ Pipeline to fit all spectra in the Hydra sample. """
     ranges_file = os.path.join(context.home_dir, "tables/wranges.fits")
     wranges = Table.read(ranges_file)
@@ -451,7 +468,7 @@ def pipeline_hydra():
     for spec in specs:
         wdir = os.path.join(data_dir, spec)
         os.chdir(wdir)
-        run_paintbox(spec, wranges)
+        run_paintbox(spec, wranges, nsteps=nsteps)
 
 if __name__ == "__main__":
     pipeline_hydra()
