@@ -2,6 +2,7 @@
 import os
 import shutil
 import copy
+import warnings
 
 import numpy as np
 from scipy import stats
@@ -16,6 +17,8 @@ import seaborn as sns
 import paintbox as pb
 
 import context
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 def make_paintbox_model(wave, store, name="test", porder=45, nssps=1, sigma=100):
     """ Prepare a model with paintbox. """
@@ -100,7 +103,7 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
         elif name == "w":
             priors[parname] = stats.uniform(loc=0, scale=1)
         elif name in linenames:
-            priors[parname] = stats.expon(loc=0, scale=0.5)
+            priors[parname] = stats.norm(loc=0, scale=0.1)
         elif name == "poly":
             porder = int(parname.split("_")[2])
             if porder == 0:
@@ -108,7 +111,7 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
                 a, b = (0 - mu) / sd, (np.infty - mu) / sd
                 priors[parname] = stats.truncnorm(a, b, mu, sd)
             else:
-                priors[parname] = stats.norm(0, 0.05)
+                priors[parname] = stats.norm(0, 0.2)
         else:
             print(f"parameter without prior: {parname}")
     return priors
@@ -439,8 +442,8 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     if context.node in context.lai_machines: #not allowing post-processing @LAI
         return
     reader = emcee.backends.HDFBackend(dbname)
-    tracedata = reader.get_chain(discard=int(nsteps * 0.9), flat=True, thin=100)
-    trace = Table(tracedata, names=logp.parnames)
+    tracedata = reader.get_chain(discard=0, flat=True, thin=100)
+    trace = Table(tracedata[-500:], names=logp.parnames)
     if nssps > 1:
         ssp_pars = list(limits.keys())
         wtrace = weighted_traces(ssp_pars, trace, nssps)
