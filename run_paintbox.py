@@ -111,7 +111,7 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
                 a, b = (0 - mu) / sd, (np.infty - mu) / sd
                 priors[parname] = stats.truncnorm(a, b, mu, sd)
             else:
-                priors[parname] = stats.norm(0, 0.2)
+                priors[parname] = stats.norm(0, 0.2 )
         else:
             print(f"parameter without prior: {parname}")
     return priors
@@ -246,7 +246,10 @@ def plot_corner(trace, outroot, title=None, redo=False):
               "Age": "Age (Gyr)", "x1": "$x_1$", "x2": "$x_2$", "Ca": "[Ca/H]",
               "Fe": "[Fe/H]", "Na": "[Na/H]",
               "K": "[K/H]", "C": "[C/H]", "N": "[N/H]",
-              "Mg": "[Mg/H]", "Si": "[Si/H]", "Ca": "[Ca/H]", "Ti": "[Ti/H]"}
+              "Mg": "[Mg/H]", "Si": "[Si/H]", "Ca": "[Ca/H]", "Ti": "[Ti/H]",
+              "Cr": "[Cr/H]", "Mn": "[Mn/H]", "Ba": "[Ba/H]", "Co": "[Co/H]",
+              "Eu": "[Eu/H]", "Sr": "[Sr/H]", "V": "[V/H]", "Cu": "[Cu/H]",
+              "a/Fe": r"[$\alpha$/Fe]", "Ni": "[Ni/H]"}
     title = "" if title is None else title
     output = "{}_corner.png".format(outroot)
     if os.path.exists(output) and not redo:
@@ -454,6 +457,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     outimg = dbname.replace(".h5", "_fit.png")
     plot_fitting(waves, fluxes, fluxerrs, masks, seds, trace, outimg,
                  skylines=skylines)
+    return
     # Make corner plot
     # Choose columns for plot
     cols_for_corner = [_ for _ in trace.colnames if _.endswith("weighted")]
@@ -469,6 +473,7 @@ def pipeline_hydra(nsteps=5000):
     data_dir = os.path.join(context.home_dir, "paintbox")
     specs = os.listdir(data_dir)
     for spec in specs:
+        print(spec)
         wdir = os.path.join(data_dir, spec)
         os.chdir(wdir)
         run_paintbox(spec, wranges, nsteps=nsteps)
