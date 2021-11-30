@@ -20,23 +20,20 @@ import context
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-def make_paintbox_model(wave, store, name="test", porder=45, nssps=1, sigma=100):
+def make_paintbox_model(wave, store, name="test", porder=45, sigma=100):
     """ Prepare a model with paintbox. """
     ssp = pb.CvD18(sigma=sigma, store=store, libpath=context.cvd_dir)
     twave = ssp.wave
     limits = ssp.limits
-    if nssps > 1:
-        for i in range(nssps):
-            p0 = pb.Polynomial(twave, 0, pname="w")
-            p0.parnames = [f"w_{i+1}"]
-            s = copy.deepcopy(ssp)
-            s.parnames = ["{}_{}".format(_, i+1) for _ in s.parnames]
-            if i == 0:
-                pop = p0 * s
-            else:
-                pop += (p0 * s)
-    else:
-        pop = ssp
+    for i, age in enumerate(["old", "young"]):
+        p0 = pb.Polynomial(twave, 0, pname="w")
+        p0.parnames = [f"w_{i+1}"]
+        s = copy.deepcopy(ssp)
+        s.parnames = [_ if _ != "Age" else f"Age_{age}" for _ in s.parnames]
+        if i == 0:
+            pop = p0 * s
+        else:
+            pop += (p0 * s)
     vname = "vsyst_{}".format(name)
     stars = pb.Resample(wave, pb.LOSVDConv(pop, losvdpars=[vname, "sigma"]))
     # Adding a polynomial
@@ -59,9 +56,10 @@ def make_paintbox_model(wave, store, name="test", porder=45, nssps=1, sigma=100)
         sed = (stars + emkin) * poly
     else:
         sed = stars * poly
-    return sed, limits, gas_names
+    final_sed = sed.constrain_duplicates()
+    return final_sed, limits, gas_names
 
-def set_priors(parnames, limits, linenames, vsyst, nssps=1):
+def set_priors(parnames, limits, linenames, vsyst):
     """ Defining prior distributions for the model.
 
     The parameters in a given paintbox model are labeled. We use these names to
@@ -79,14 +77,24 @@ def set_priors(parnames, limits, linenames, vsyst, nssps=1):
     vsyst: float
         Approximate radial velocity of the system.
 
-    nssps: int
-        Number of single stellar populations in the model.
+    Returns
+    -------
+    dict
+        Dictionary containing the prior distributions.
 
     """
     priors = {}
     for parname in parnames:
         name = parname.split("_")[0]
-        if name in limits:
+        if parname == "Age_old":
+            vmin, vmax  = 1, 3
+            delta = vmax - vmin
+            priors[parname] = stats.uniform(loc=vmin, scale=delta)
+        elif parname == "Age_young":
+            vmin, vmax  = 3, 13
+            delta = vmax - vmin
+            priors[parname] = stats.uniform(loc=vmin, scale=delta)
+        elif name in limits:
             vmin, vmax = limits[name]
             delta = vmax - vmin
             priors[parname] = stats.uniform(loc=vmin, scale=delta)
@@ -154,18 +162,6 @@ def run_sampler(outdb, nsteps=5000):
                                          backend=backend, pool=pool)
         sampler.run_mcmc(pos, nsteps, progress=True)
     return
-
-def weighted_traces(parnames, trace, nssps):
-    """ Combine SSP traces to have mass/luminosity weighted properties"""
-    weights = np.array([trace["w_{}".format(i+1)].data for i in range(
-        nssps)])
-    wtrace = []
-    for param in parnames:
-        data = np.array([trace["{}_{}".format(param, i+1)].data
-                         for i in range(nssps)])
-        t = np.average(data, weights=weights, axis=0)
-        wtrace.append(Table([t], names=["{}_weighted".format(param)]))
-    return hstack(wtrace)
 
 def make_table(trace, outtab):
     data = np.array([trace[p].data for p in trace.colnames]).T
@@ -313,7 +309,7 @@ def plot_corner(trace, outroot, title=None, redo=False):
     return
 
 def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
-                 nssps=2, dsky=3):
+                 dsky=3):
     """ Run paintbox.
 
     Parameters
@@ -343,10 +339,6 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
             distribution.
             - studt2: same as studt but with scale factor (eta) to inflate the
             uncertainties
-
-    nssps: int (default is 2)
-        Number os single stellar populations (SSPs) to be used for the
-        stellar component of the model.
 
     dsky: float (default is 3)
         Size around telluric lines to be masked.
@@ -397,7 +389,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
         # Building paintbox model
         name = f"s{sec}" # Identification of sector in paintbox
         sed, limits, lines = make_paintbox_model(wave, store,
-                              nssps=nssps, name=name, sigma=sigma,
+                              name=name, sigma=sigma,
                               porder=porder)
         logp = pb.Normal2LogLike(flux, sed, obserr=fluxerr, mask=mask)
         logps.append(logp)
@@ -416,8 +408,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     # Making priors
     galaxy = spec.split("_")[2]
     v0 = {"NGC3311": 3825, "NGC3309": 4075, "Halo": 3900}
-    priors = set_priors(logp.parnames, limits, linenames, vsyst=v0[galaxy],
-                        nssps=nssps)
+    priors = set_priors(logp.parnames, limits, linenames, vsyst=v0[galaxy])
     # # Testing priors
     # ntest = 8
     # ndim = len(logp.parnames)
@@ -433,7 +424,7 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     #     print(logp(pos[i]))
     # plt.show()
     # Perform fitting
-    dbname = f"mcmc_nssps{nssps}_{loglike}_nsteps{nsteps}.h5"
+    dbname = f"mcmc_{loglike}_nsteps{nsteps}.h5"
     # Stores the chain results in a temporary database
     tmp_db = f"{dbname}_tmp"
     if os.path.exists(tmp_db):
@@ -447,10 +438,6 @@ def run_paintbox(spec, wranges, dlam=100, nsteps=5000, loglike="normal2",
     reader = emcee.backends.HDFBackend(dbname)
     tracedata = reader.get_chain(discard=0, flat=True, thin=100)
     trace = Table(tracedata[-500:], names=logp.parnames)
-    if nssps > 1:
-        ssp_pars = list(limits.keys())
-        wtrace = weighted_traces(ssp_pars, trace, nssps)
-        trace = hstack([trace, wtrace])
     outtab = os.path.join(dbname.replace(".h5", "_results.fits"))
     make_table(trace, outtab)
     # Plot fit
@@ -473,7 +460,6 @@ def pipeline_hydra(nsteps=5000):
     data_dir = os.path.join(context.home_dir, "paintbox")
     specs = os.listdir(data_dir)
     for spec in specs:
-        print(spec)
         wdir = os.path.join(data_dir, spec)
         os.chdir(wdir)
         run_paintbox(spec, wranges, nsteps=nsteps)

@@ -27,7 +27,8 @@ def define_wranges(specs, redo=True):
         mask = mask.astype(np.bool).astype(np.int)
         masks.append(mask)
         res.append(res_kms)
-        plt.plot(wave, res_kms)
+        # plt.plot(wave, res_kms)
+    # plt.show()
     res = np.array(res).mean(axis=0)
     masks = np.array(masks)
     mask = masks.max(axis=0) # Combining all masks into one mask
@@ -121,10 +122,12 @@ def prepare_sample_hydra():
     wdir = os.path.join(context.home_dir, "data")
     os.chdir(wdir)
     specs = sorted([_ for _ in os.listdir(wdir) if _.endswith("spectrum.dat")])
+    specs = specs[1:] # First spectrum has different dispersion
     pb_dir = os.path.join(context.home_dir, "paintbox")
     if not os.path.exists(pb_dir):
         os.mkdir(pb_dir)
     wranges = define_wranges(specs)
+    specs = sorted([_ for _ in os.listdir(wdir) if _.endswith("spectrum.dat")])
     for spec in specs:
         name = "_".join(spec.split("_")[:-1])
         spec_dir = os.path.join(pb_dir, name)
